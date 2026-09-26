@@ -253,3 +253,320 @@ if __name__ == "__main__":
     print("Slice thickness:", metadata[0]["thickness"])
     print("First slice:", metadata[0]["file"])
     print("Last slice:", metadata[-1]["file"])
+
+
+def load_ct_volume_auto(zip_path):
+    """
+    Load a CT volume from an uploaded ZIP containing one CT series.
+
+    The ZIP may contain:
+        - DICOM files directly at the root
+        - one enclosing folder
+        - one patient folder containing the CT series
+
+    If multiple independent top-level folders contain DICOM files,
+    the function refuses to guess which patient should be analyzed.
+
+    The actual reconstruction-selection, sorting, duplicate-removal,
+    and HU-conversion logic remains the same as load_ct_volume().
+    """
+
+    zip_path = Path(zip_path)
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+
+        names = [
+            n.replace("\\", "/")
+            for n in archive.namelist()
+            if n.lower().endswith(".dcm")
+            and "__macosx" not in n.lower()
+        ]
+
+    if not names:
+        raise ValueError(
+            "No DICOM files were found inside the uploaded CT ZIP."
+        )
+
+    # ---------------------------------------------------------
+    # Determine whether the archive contains one or many
+    # top-level CT folders.
+    # ---------------------------------------------------------
+
+    top_level_folders = set()
+
+    for name in names:
+        parts = [p for p in name.split("/") if p]
+
+        if len(parts) >= 2:
+            top_level_folders.add(parts[0])
+
+    if len(top_level_folders) > 1:
+
+        folders = sorted(top_level_folders)
+
+        preview = ", ".join(folders[:8])
+
+        if len(folders) > 8:
+            preview += ", ..."
+
+        raise ValueError(
+            "The uploaded CT ZIP contains multiple folders with "
+            f"DICOM files ({len(folders)} detected). "
+            "Please upload a ZIP containing one patient's CT series. "
+            f"Detected folders: {preview}"
+        )
+
+    # ---------------------------------------------------------
+    # Root-level DICOM files: use a temporary in-memory-style
+    # folder selection implemented by the helper below.
+    # ---------------------------------------------------------
+
+    if len(top_level_folders) == 0:
+
+        return _load_ct_volume_from_names(
+            zip_path,
+            names,
+        )
+
+    patient_folder = sorted(top_level_folders)[0]
+
+    return load_ct_volume(
+        zip_path,
+        patient_folder,
+    )
+
+
+def _load_ct_volume_from_names(zip_path, names):
+    """
+    Same CT reconstruction-selection logic as load_ct_volume(),
+    but operates on an explicitly supplied list of DICOM names.
+
+    Used for patient-specific ZIPs whose DICOM files are stored
+    directly at the ZIP root.
+    """
+
+    zip_path = Path(zip_path)
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+
+        records = []
+
+        # -----------------------------------------------------
+        # Read metadata and keep PRIMARY + AXIAL only.
+        # -----------------------------------------------------
+
+        for name in names:
+
+            with archive.open(name) as f:
+                ds = pydicom.dcmread(
+                    f,
+                    stop_before_pixels=True,
+                )
+
+            image_type = [
+                str(x).upper()
+                for x in getattr(ds, "ImageType", [])
+            ]
+
+            if "PRIMARY" not in image_type:
+                continue
+
+            if "AXIAL" not in image_type:
+                continue
+
+            position = getattr(
+                ds,
+                "ImagePositionPatient",
+                None,
+            )
+
+            spacing = getattr(
+                ds,
+                "PixelSpacing",
+                None,
+            )
+
+            if position is None or spacing is None:
+                continue
+
+            kernel = str(
+                getattr(
+                    ds,
+                    "ConvolutionKernel",
+                    "Unknown",
+                )
+            )
+
+            thickness = float(
+                getattr(
+                    ds,
+                    "SliceThickness",
+                    0.0,
+                )
+            )
+
+            row_spacing = float(spacing[0])
+            col_spacing = float(spacing[1])
+            z_position = float(position[2])
+
+            records.append(
+                {
+                    "name": name,
+                    "kernel": kernel,
+                    "thickness": thickness,
+                    "row_spacing": row_spacing,
+                    "col_spacing": col_spacing,
+                    "z": z_position,
+                }
+            )
+
+        if not records:
+            raise ValueError(
+                "No PRIMARY + AXIAL CT slices were found "
+                "in the uploaded CT ZIP."
+            )
+
+        # -----------------------------------------------------
+        # Group reconstruction candidates.
+        # -----------------------------------------------------
+
+        candidates = {}
+
+        for record in records:
+
+            key = (
+                record["kernel"],
+                round(record["thickness"], 3),
+                round(record["row_spacing"], 6),
+                round(record["col_spacing"], 6),
+            )
+
+            candidates.setdefault(
+                key,
+                [],
+            ).append(record)
+
+        candidate_list = []
+
+        for key, group in candidates.items():
+
+            z_values = sorted(
+                set(
+                    round(
+                        r["z"],
+                        3,
+                    )
+                    for r in group
+                )
+            )
+
+            candidate_list.append(
+                {
+                    "key": key,
+                    "records": group,
+                    "slice_count": len(group),
+                    "unique_z": len(z_values),
+                    "z_min": min(z_values),
+                    "z_max": max(z_values),
+                    "coverage": (
+                        max(z_values)
+                        - min(z_values)
+                    ),
+                }
+            )
+
+        selected = sorted(
+            candidate_list,
+            key=lambda c: (
+                c["key"][1],
+                c["key"][2],
+                c["key"][3],
+                -c["coverage"],
+                c["key"][0],
+            ),
+        )[0]
+
+        selected_records = sorted(
+            selected["records"],
+            key=lambda r: r["z"],
+        )
+
+        # -----------------------------------------------------
+        # Remove duplicate Z positions.
+        # -----------------------------------------------------
+
+        unique_records = []
+        seen_z = set()
+
+        for record in selected_records:
+
+            z_key = round(
+                record["z"],
+                3,
+            )
+
+            if z_key in seen_z:
+                continue
+
+            seen_z.add(z_key)
+            unique_records.append(record)
+
+        # -----------------------------------------------------
+        # Load pixels and convert to HU.
+        # -----------------------------------------------------
+
+        slices = []
+        metadata = []
+
+        for record in unique_records:
+
+            with archive.open(record["name"]) as f:
+                ds = pydicom.dcmread(f)
+
+            pixel_array = ds.pixel_array.astype(
+                np.float32
+            )
+
+            slope = float(
+                getattr(
+                    ds,
+                    "RescaleSlope",
+                    1.0,
+                )
+            )
+
+            intercept = float(
+                getattr(
+                    ds,
+                    "RescaleIntercept",
+                    0.0,
+                )
+            )
+
+            hu = (
+                pixel_array * slope
+                + intercept
+            )
+
+            hu[hu == -2048.0] = -1024.0
+            hu[hu == -3024.0] = -1024.0
+
+            slices.append(hu)
+
+            metadata.append(
+                {
+                    "file": record["name"],
+                    "z": record["z"],
+                    "kernel": record["kernel"],
+                    "thickness": record["thickness"],
+                    "row_spacing": record["row_spacing"],
+                    "col_spacing": record["col_spacing"],
+                }
+            )
+
+        volume = np.stack(
+            slices,
+            axis=0,
+        ).astype(np.float32)
+
+        return volume, metadata

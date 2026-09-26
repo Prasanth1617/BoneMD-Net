@@ -12,7 +12,7 @@ from PIL import Image
 from inference.inference_engine import BoneMDInferenceEngine
 from utils.xray_loader import load_xray
 from utils.xray_preprocess import preprocess_xray
-from utils.ct_loader import load_ct_volume
+from utils.ct_loader import load_ct_volume, load_ct_volume_auto
 from utils.ct_preprocess import preprocess_ct
 
 
@@ -67,46 +67,16 @@ def load_preview(zip_path, dicom_path):
     )
 
 
-def load_uploaded_xray_preview(dicom_path):
-    if dicom_path is None:
+def load_uploaded_xray_preview(image_path):
+    if image_path is None:
         return None
 
     import pydicom
 
-    ds = pydicom.dcmread(dicom_path)
-    image = ds.pixel_array.astype(np.float32)
+    suffix = Path(image_path).suffix.lower()
 
-    if getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
-        bits_stored = int(ds.BitsStored)
-        max_value = float((1 << bits_stored) - 1)
-        image = max_value - image
-
-    image = preprocess_xray(image)
-
-    image = (
-        np.clip(image, 0.0, 1.0) * 255
-    ).astype(np.uint8)
-
-    return Image.fromarray(image, mode="L")
-
-
-def predict_uploaded_images(
-    ap_path,
-    lateral_path,
-    ct_zip_path,
-    ct_patient_id,
-):
-    if ap_path is None or lateral_path is None or ct_zip_path is None:
-        raise ValueError(
-            "Please upload AP X-ray, Lateral X-ray, and CT ZIP."
-        )
-
-    import pydicom
-    import torch
-    import zipfile
-
-    def prepare_xray(dicom_path):
-        ds = pydicom.dcmread(dicom_path)
+    if suffix == ".dcm":
+        ds = pydicom.dcmread(image_path)
         image = ds.pixel_array.astype(np.float32)
 
         if getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
@@ -114,40 +84,75 @@ def predict_uploaded_images(
             max_value = float((1 << bits_stored) - 1)
             image = max_value - image
 
-        image = preprocess_xray(image)
-        return torch.from_numpy(image).float().unsqueeze(0)
-
-    if ct_patient_id is None:
-        raise ValueError(
-            "Please enter the CT Patient ID."
+    elif suffix in {".jpg", ".jpeg", ".png"}:
+        image = np.asarray(
+            Image.open(image_path).convert("L"),
+            dtype=np.float32,
         )
 
-    ct_patient_id = int(ct_patient_id)
-
-    ct_folder = f"lumos_ct_{ct_patient_id:03d}"
-
-    with zipfile.ZipFile(ct_zip_path, "r") as archive:
-
-        prefix = ct_folder + "/"
-
-        dicom_files = [
-            name
-            for name in archive.namelist()
-            if name.startswith(prefix)
-            and name.lower().endswith(".dcm")
-            and "__macosx" not in name.lower()
-        ]
-
-    if not dicom_files:
+    else:
         raise ValueError(
-            f"No CT DICOM files found for Patient ID "
-            f"{ct_patient_id} ({ct_folder}) in the uploaded ZIP."
+            "Unsupported X-ray format. Please upload DICOM, JPG, JPEG, or PNG."
         )
 
-    ct_volume, ct_metadata = load_ct_volume(
-        ct_zip_path,
-        ct_folder,
+    image = preprocess_xray(image)
+
+    image = (
+        np.clip(image, 0.0, 1.0) * 255
+    ).astype(np.uint8)
+
+    return Image.fromarray(
+        image,
+        mode="L",
     )
+
+
+def predict_uploaded_images(
+    ap_path,
+    lateral_path,
+    ct_zip_path,
+):
+    if ap_path is None or lateral_path is None or ct_zip_path is None:
+        raise ValueError(
+            "Please upload AP X-ray, Lateral X-ray, and a CT ZIP."
+        )
+
+    import pydicom
+    import torch
+
+    def prepare_xray(image_path):
+        suffix = Path(image_path).suffix.lower()
+
+        if suffix == ".dcm":
+            ds = pydicom.dcmread(image_path)
+            image = ds.pixel_array.astype(np.float32)
+
+            if getattr(ds, "PhotometricInterpretation", "") == "MONOCHROME1":
+                bits_stored = int(ds.BitsStored)
+                max_value = float((1 << bits_stored) - 1)
+                image = max_value - image
+
+        elif suffix in {".jpg", ".jpeg", ".png"}:
+            image = np.asarray(
+                Image.open(image_path).convert("L"),
+                dtype=np.float32,
+            )
+
+        else:
+            raise ValueError(
+                "Unsupported X-ray format. Please upload DICOM, JPG, JPEG, or PNG."
+            )
+
+        image = preprocess_xray(image)
+
+        return torch.from_numpy(
+            image
+        ).float().unsqueeze(0)
+
+    ct_volume, ct_metadata = load_ct_volume_auto(
+        ct_zip_path
+    )
+
     ct_volume = preprocess_ct(
         ct_volume,
         ct_metadata,
@@ -155,7 +160,13 @@ def predict_uploaded_images(
 
     ap = prepare_xray(ap_path).unsqueeze(0)
     lateral = prepare_xray(lateral_path).unsqueeze(0)
-    ct = torch.from_numpy(ct_volume).float().unsqueeze(0).unsqueeze(0)
+
+    ct = (
+        torch.from_numpy(ct_volume)
+        .float()
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
 
     ap = ap.to(ENGINE.device)
     lateral = lateral.to(ENGINE.device)
@@ -273,13 +284,11 @@ def analyze_uploaded_images(
     ap_path,
     lateral_path,
     ct_zip_path,
-    ct_patient_id,
 ):
     result = predict_uploaded_images(
         ap_path,
         lateral_path,
         ct_zip_path,
-        ct_patient_id,
     )
 
     prediction_text = (
@@ -343,44 +352,29 @@ def load_ct_volume_for_preview(zip_path, patient_folder):
     )
 
 
-def load_uploaded_ct_preview(zip_path, patient_id):
+def load_uploaded_ct_preview(zip_path):
     if zip_path is None:
         return None, None
 
-    if patient_id is None:
-        raise ValueError(
-            "Please enter the CT Patient ID."
-        )
+    volume, metadata = load_ct_volume_auto(
+        zip_path
+    )
 
-    import zipfile
+    volume = preprocess_ct(
+        volume,
+        metadata,
+    )
 
-    patient_id = int(patient_id)
-    patient_folder = f"lumos_ct_{patient_id:03d}"
-
-    with zipfile.ZipFile(zip_path, "r") as archive:
-        prefix = patient_folder + "/"
-
-        dicom_files = [
-            name
-            for name in archive.namelist()
-            if name.startswith(prefix)
-            and name.lower().endswith(".dcm")
-            and "__macosx" not in name.lower()
-        ]
-
-    if not dicom_files:
-        raise ValueError(
-            f"No CT DICOM files found for Patient ID {patient_id} "
-            f"({patient_folder}) in the uploaded ZIP."
-        )
-
-    volume = load_ct_volume_for_preview(
-        zip_path,
-        patient_folder,
+    initial_slice = min(
+        96,
+        volume.shape[0] - 1,
     )
 
     return (
-        ct_slice_to_image(volume, 96),
+        ct_slice_to_image(
+            volume,
+            initial_slice,
+        ),
         volume,
     )
 
@@ -1440,7 +1434,7 @@ with gr.Blocks(
 
                     uploaded_ap = gr.File(
                         label="",
-                        file_types=[".dcm"],
+                        file_types=[".dcm", ".jpg", ".jpeg", ".png"],
                         type="filepath",
                         height=120,
                         show_label=False,
@@ -1450,7 +1444,7 @@ with gr.Blocks(
                     gr.HTML(
                         """
                         <div class="bm-file-hint">
-                            DICOM · lumbar AP image
+                            DICOM / JPG / PNG · lumbar AP image
                         </div>
                         """
                     )
@@ -1484,7 +1478,7 @@ with gr.Blocks(
 
                     uploaded_lateral = gr.File(
                         label="",
-                        file_types=[".dcm"],
+                        file_types=[".dcm", ".jpg", ".jpeg", ".png"],
                         type="filepath",
                         height=120,
                         show_label=False,
@@ -1494,7 +1488,7 @@ with gr.Blocks(
                     gr.HTML(
                         """
                         <div class="bm-file-hint">
-                            DICOM · lateral image
+                            DICOM / JPG / PNG · lateral image
                         </div>
                         """
                     )
@@ -1520,7 +1514,7 @@ with gr.Blocks(
                             </div>
 
                             <div class="bm-upload-card-subtitle">
-                                LUMOS CT DICOM archive
+                                Patient CT DICOM archive
                             </div>
                         </div>
 
@@ -1545,23 +1539,11 @@ with gr.Blocks(
                             elem_classes=["bm-file-drop"],
                         )
 
-                    with gr.Column(
-                        scale=1,
-                        min_width=150,
-                    ):
-
-                        uploaded_ct_patient_id = gr.Number(
-                            label="CT Patient ID",
-                            value=4,
-                            precision=0,
-                            minimum=1,
-                            maximum=803,
-                        )
 
                 gr.HTML(
                     """
                     <div class="bm-file-hint">
-                        ZIP archive · select the LUMOS patient contained in the archive
+                        ZIP archive · one patient CT series; patient folder is detected automatically
                     </div>
                     """
                 )
@@ -1827,19 +1809,6 @@ with gr.Blocks(
         fn=load_uploaded_ct_preview,
         inputs=[
             uploaded_ct,
-            uploaded_ct_patient_id,
-        ],
-        outputs=[
-            ct_preview,
-            ct_patient_state,
-        ],
-    )
-
-    uploaded_ct_patient_id.change(
-        fn=load_uploaded_ct_preview,
-        inputs=[
-            uploaded_ct,
-            uploaded_ct_patient_id,
         ],
         outputs=[
             ct_preview,
@@ -1855,7 +1824,6 @@ with gr.Blocks(
             uploaded_ap,
             uploaded_lateral,
             uploaded_ct,
-            uploaded_ct_patient_id,
         ],
         outputs=[
             prediction,

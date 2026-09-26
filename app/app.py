@@ -1360,8 +1360,7 @@ with gr.Blocks(
                     </div>
 
                     <div class="bm-mode-text">
-                        Analyze a patient already present in the
-                        multimodal inference manifest.
+                        Analyze a patient from the cached LUMOS test set.
                     </div>
                 </div>
                 """

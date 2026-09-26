@@ -22,13 +22,7 @@ from utils.ct_preprocess import preprocess_ct
 
 TITLE = "BoneMD-Net"
 
-XRay_ZIP = PROJECT_ROOT / "dataset" / "lumos_x_001_280_dcm.zip"
-
-MANIFEST_PATH = (
-    PROJECT_ROOT
-    / "results"
-    / "final_multimodal_manifest.csv"
-)
+TEST_CACHE = PROJECT_ROOT / "cache" / "test"
 
 CLASS_NAMES = {
     0: "Normal",
@@ -183,8 +177,6 @@ def predict_uploaded_images(
             probabilities
         ).item()
 
-        fusion_weights = outputs["fusion_weights"][0]
-
     return {
         "predicted_class": predicted_class,
         "predicted_name": CLASS_NAMES[predicted_class],
@@ -194,10 +186,11 @@ def predict_uploaded_images(
             )
             for i in range(3)
         },
-        "fusion_weights": {
-            "AP": float(fusion_weights[0].item()),
-            "Lateral": float(fusion_weights[1].item()),
-            "CT": float(fusion_weights[2].item()),
+        "feature_dimensions": {
+            "AP X-ray": int(outputs["ap_features"].shape[-1]),
+            "Lateral X-ray": int(outputs["lateral_features"].shape[-1]),
+            "CT": int(outputs["ct_features"].shape[-1]),
+            "Fused representation": int(outputs["fused_features"].shape[-1]),
         },
     }
 
@@ -249,40 +242,24 @@ def format_probability_cards(probabilities):
     return html
 
 
-def format_fusion_cards(fusion_weights):
-    if not fusion_weights:
+def format_feature_cards(feature_dimensions):
+    if not feature_dimensions:
         return """
         <div class="bm-empty-result">
-            Run an analysis to view modality contribution.
+            Run an analysis to view feature representations.
         </div>
         """
-
-    order = [
-        ("AP X-ray", "AP"),
-        ("Lateral X-ray", "Lateral"),
-        ("CT", "CT"),
-    ]
 
     html = """
     <div class="bm-metric-list">
     """
 
-    for label, key in order:
-        value = float(fusion_weights.get(key, 0.0))
-        percent = value * 100.0
-
+    for label, dimension in feature_dimensions.items():
         html += f"""
         <div class="bm-metric">
             <div class="bm-metric-header">
                 <span>{label}</span>
-                <strong>{percent:.1f}%</strong>
-            </div>
-
-            <div class="bm-progress-track">
-                <div
-                    class="bm-progress-fill bm-fusion"
-                    style="width:{percent:.1f}%"
-                ></div>
+                <strong>{int(dimension)}-D</strong>
             </div>
         </div>
         """
@@ -315,8 +292,8 @@ def analyze_uploaded_images(
         format_probability_cards(
             result["probabilities"]
         ),
-        format_fusion_cards(
-            result["fusion_weights"]
+        format_feature_cards(
+            result["feature_dimensions"]
         ),
     )
 
@@ -428,85 +405,83 @@ def analyze_patient(patient_id):
         None,
         "Enter a patient ID.",
         format_probability_cards({}),
-        format_fusion_cards({}),
+        format_feature_cards({}),
         "No patient selected.",
     )
 
     if patient_id is None:
         return empty
 
-    patient_id = int(patient_id)
-
-    manifest = pd.read_csv(
-        MANIFEST_PATH
-    )
-
-    matches = manifest[
-        manifest["patient_id"] == patient_id
-    ]
-
-    if matches.empty:
+    try:
+        patient_id = int(patient_id)
+    except (TypeError, ValueError):
         return (
             None,
             None,
             None,
             None,
             None,
-            "Patient not available.",
+            "Invalid patient ID.",
             format_probability_cards({}),
-            format_fusion_cards({}),
-            f"Patient {patient_id} is not present in the multimodal inference manifest.",
+            format_feature_cards({}),
+            "Please enter a numeric patient ID.",
         )
-
-    record = matches.iloc[0]
-
-    ap_path = str(
-        record["ap_dicom_file"]
-    )
-
-    lateral_path = str(
-        record["lateral_dicom_file"]
-    )
-
-    ct_zip = (
-        PROJECT_ROOT
-        / "dataset"
-        / str(record["ct_zip"])
-    )
-
-    ct_folder = str(
-        record["ct_patient_folder"]
-    )
 
     try:
+        # Use the cached multimodal test patient.
+        sample = ENGINE.find_patient(patient_id)
 
-        ap_image = load_preview(
-            XRay_ZIP,
-            ap_path,
+        # Generate display images from the cached tensors.
+        ap_array = (
+            sample["ap"]
+            .detach()
+            .cpu()
+            .numpy()
+            .squeeze()
         )
 
-        lateral_image = load_preview(
-            XRay_ZIP,
-            lateral_path,
+        lateral_array = (
+            sample["lateral"]
+            .detach()
+            .cpu()
+            .numpy()
+            .squeeze()
         )
 
-        ct_volume = load_ct_volume_for_preview(
-            ct_zip,
-            ct_folder,
+        ap_image = Image.fromarray(
+            np.uint8(
+                np.clip(ap_array, 0.0, 1.0) * 255.0
+            )
+        )
+
+        lateral_image = Image.fromarray(
+            np.uint8(
+                np.clip(lateral_array, 0.0, 1.0) * 255.0
+            )
+        )
+
+        # Cached CT tensor is [1, D, H, W].
+        ct_volume = (
+            sample["ct"]
+            .detach()
+            .cpu()
+            .numpy()
+            .squeeze(0)
+        )
+
+        slice_index = min(
+            96,
+            ct_volume.shape[0] - 1,
         )
 
         ct_image = ct_slice_to_image(
             ct_volume,
-            96,
+            slice_index,
         )
 
-        result = ENGINE.predict(
-            XRay_ZIP,
-            ap_path,
-            XRay_ZIP,
-            lateral_path,
-            ct_zip,
-            ct_folder,
+        # Run the final BoneMDTeacherNorm model.
+        result = ENGINE.predict_patient(
+            patient_id
         )
 
     except Exception as exc:
@@ -519,8 +494,8 @@ def analyze_patient(patient_id):
             None,
             "Inference error",
             format_probability_cards({}),
-            format_fusion_cards({}),
-            str(exc),
+            format_feature_cards({}),
+            f"{type(exc).__name__}: {exc}",
         )
 
     prediction = (
@@ -528,9 +503,15 @@ def analyze_patient(patient_id):
         f"(Class {result['predicted_class']})"
     )
 
+    true_name = result.get(
+        "true_name",
+        "Unknown",
+    )
+
     status = (
         f"Patient {patient_id} analyzed successfully. "
-        f"Model checkpoint: epoch "
+        f"True label: {true_name}. "
+        f"Final teacher checkpoint: epoch "
         f"{result['checkpoint_epoch']}."
     )
 
@@ -539,14 +520,17 @@ def analyze_patient(patient_id):
         lateral_image,
         ct_image,
         ct_volume,
-        "Slice **96 / 191**",
+        f"Slice **{slice_index + 1} / {ct_volume.shape[0]}**",
         prediction,
         format_probability_cards(
             result["probabilities"]
         ),
-        format_fusion_cards(
-            result["fusion_weights"]
-        ),
+        format_feature_cards({
+            "AP X-ray": result["ap_features"][-1],
+            "Lateral X-ray": result["lateral_features"][-1],
+            "CT": result["ct_features"][-1],
+            "Fused representation": result["fused_features"][-1],
+        }),
         status,
     )
 
@@ -1323,8 +1307,7 @@ with gr.Blocks(
 
                     <div class="bm-tagline">
                         Multimodal bone disorder analysis using
-                        lumbar X-ray and CT imaging with
-                        knowledge distillation.
+                        lumbar X-ray and CT imaging.
                     </div>
                 </div>
 
@@ -1414,7 +1397,7 @@ with gr.Blocks(
                         </div>
 
                         <div class="bm-upload-subtitle">
-                            Provide the three imaging inputs required by BoneMD-Net.
+                            Provide the three imaging inputs required by the multimodal model.
                         </div>
                     </div>
 
@@ -1618,7 +1601,7 @@ with gr.Blocks(
                 </div>
 
                 <div class="bm-card-subtitle">
-                    BoneMD-Net student inference result.
+                    BoneMD-Net final teacher inference result.
                 </div>
                 """
             )
@@ -1641,11 +1624,11 @@ with gr.Blocks(
             )
 
             gr.Markdown(
-                "#### Modality contribution"
+                "#### Feature representation"
             )
 
             fusion = gr.HTML(
-                value=format_fusion_cards({}),
+                value=format_feature_cards({}),
                 show_label=False,
                 elem_classes=["bm-result-html"],
             )
@@ -1769,12 +1752,12 @@ with gr.Blocks(
             """
 | Component | Configuration |
 |---|---|
-| Architecture | BoneMD-Net Student |
-| Learning strategy | Knowledge Distillation |
+| Architecture | BoneMDTeacherNorm |
+| Learning strategy | Multimodal supervised learning |
 | Modalities | AP X-ray + Lateral X-ray + CT |
 | Output | 3-class bone disorder classification |
-| Student parameters | 1.11M |
-| Checkpoint | `student_kd_v2_best.pth` |
+| Parameters | 6.11M |
+| Checkpoint | `FINAL_BEST_TEACHER_75_61.pth` |
 
 **Classes:** Normal · Osteopenia · Osteoporosis
 """

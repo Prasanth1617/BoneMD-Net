@@ -6,16 +6,25 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
 
-from utils.xray_loader import load_xray
-from utils.xray_preprocess import preprocess_xray
-from utils.ct_loader import load_ct_volume
-from utils.ct_preprocess import preprocess_ct
-from models.bone_md_student import BoneMDStudent
+from dataset.cached_multimodal_dataset import CachedMultimodalDataset
+from models.bone_md_teacher_norm import BoneMDTeacherNorm
 
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
 
-CHECKPOINT = PROJECT_ROOT / "checkpoints" / "student_kd_v2_best.pth"
+CHECKPOINT = (
+    PROJECT_ROOT
+    / "checkpoints"
+    / "FINAL_BEST_TEACHER_75_61.pth"
+)
+
+TEST_CACHE = (
+    PROJECT_ROOT
+    / "cache"
+    / "test"
+)
 
 CLASS_NAMES = {
     0: "Normal",
@@ -27,10 +36,11 @@ CLASS_NAMES = {
 class BoneMDInferenceEngine:
 
     def __init__(self):
+
         self.device = DEVICE
 
-        self.model = BoneMDStudent(
-            feature_dim=256,
+        self.model = BoneMDTeacherNorm(
+            feature_dim=512,
             num_classes=3,
         ).to(self.device)
 
@@ -50,66 +60,57 @@ class BoneMDInferenceEngine:
             "unknown",
         )
 
-    def prepare_xray(self, zip_path, dicom_path):
-        image, ds = load_xray(
-            zip_path,
-            dicom_path,
+        self.best_validation_accuracy = checkpoint.get(
+            "val_accuracy",
+            "unknown",
         )
 
-        image = preprocess_xray(image)
-
-        tensor = torch.from_numpy(
-            image
-        ).float()
-
-        return tensor.unsqueeze(0), ds
-
-    def prepare_ct(self, zip_path, patient_folder):
-        volume, metadata = load_ct_volume(
-            zip_path,
-            patient_folder,
+        self.dataset = CachedMultimodalDataset(
+            TEST_CACHE
         )
 
-        volume = preprocess_ct(
-            volume,
-            metadata,
+    def find_patient(self, patient_id):
+
+        patient_id = int(patient_id)
+
+        for index in range(len(self.dataset)):
+
+            sample = self.dataset[index]
+
+            if int(sample["patient_id"]) == patient_id:
+                return sample
+
+        raise ValueError(
+            f"Patient {patient_id} was not found "
+            f"in the test cache."
         )
 
-        tensor = torch.from_numpy(
-            volume
-        ).float()
+    def predict_patient(self, patient_id):
 
-        return tensor.unsqueeze(0), metadata
-
-    def predict(
-        self,
-        ap_zip,
-        ap_path,
-        lateral_zip,
-        lateral_path,
-        ct_zip,
-        ct_folder,
-    ):
-        ap, ap_ds = self.prepare_xray(
-            ap_zip,
-            ap_path,
+        sample = self.find_patient(
+            patient_id
         )
 
-        lateral, lateral_ds = self.prepare_xray(
-            lateral_zip,
-            lateral_path,
+        ap = (
+            sample["ap"]
+            .unsqueeze(0)
+            .to(self.device)
         )
 
-        ct, ct_metadata = self.prepare_ct(
-            ct_zip,
-            ct_folder,
+        lateral = (
+            sample["lateral"]
+            .unsqueeze(0)
+            .to(self.device)
         )
 
-        ap = ap.unsqueeze(0).to(self.device)
-        lateral = lateral.unsqueeze(0).to(self.device)
-        ct = ct.unsqueeze(0).to(self.device)
+        ct = (
+            sample["ct"]
+            .unsqueeze(0)
+            .to(self.device)
+        )
 
         with torch.no_grad():
+
             outputs = self.model(
                 ap,
                 lateral,
@@ -125,34 +126,71 @@ class BoneMDInferenceEngine:
                 probabilities
             ).item()
 
-            fusion_weights = outputs[
-                "fusion_weights"
-            ][0]
-
         return {
+            "patient_id": int(
+                sample["patient_id"]
+            ),
+
+            "true_label": int(
+                sample["label"]
+            ),
+
+            "true_name": CLASS_NAMES[
+                int(sample["label"])
+            ],
+
             "predicted_class": predicted_class,
+
             "predicted_name": CLASS_NAMES[
                 predicted_class
             ],
+
             "probabilities": {
                 CLASS_NAMES[i]: float(
                     probabilities[i].item()
                 )
                 for i in range(3)
             },
-            "fusion_weights": {
-                "AP": float(
-                    fusion_weights[0].item()
-                ),
-                "Lateral": float(
-                    fusion_weights[1].item()
-                ),
-                "CT": float(
-                    fusion_weights[2].item()
-                ),
-            },
-            "checkpoint_epoch": self.checkpoint_epoch,
-            "ap_shape": tuple(ap.shape),
-            "lateral_shape": tuple(lateral.shape),
-            "ct_shape": tuple(ct.shape),
+
+            "checkpoint_epoch": (
+                self.checkpoint_epoch
+            ),
+
+            "best_validation_accuracy": (
+                self.best_validation_accuracy
+            ),
+
+            "ap_shape": tuple(
+                sample["ap"].shape
+            ),
+
+            "lateral_shape": tuple(
+                sample["lateral"].shape
+            ),
+
+            "ct_shape": tuple(
+                sample["ct"].shape
+            ),
+
+            "ap_features": tuple(
+                outputs["ap_features"].shape
+            ),
+
+            "lateral_features": tuple(
+                outputs["lateral_features"].shape
+            ),
+
+            "ct_features": tuple(
+                outputs["ct_features"].shape
+            ),
+
+            "fused_features": tuple(
+                outputs["fused_features"].shape
+            ),
+
+            "ap_tensor": sample["ap"],
+
+            "lateral_tensor": sample["lateral"],
+
+            "ct_tensor": sample["ct"],
         }

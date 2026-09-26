@@ -1,0 +1,12 @@
+﻿numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+opencv-python
+Pillow
+pydicom
+openpyxl
+PyYAML
+tqdm

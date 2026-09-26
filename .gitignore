@@ -1,0 +1,23 @@
+﻿# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Large processed dataset - transferred separately
+cache/
+
+# Raw LUMOS datasets
+dataset/*.zip
+
+# Local/generated files
+*.log
+*.tmp
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+dataset/lumos_clinical_data.xlsx

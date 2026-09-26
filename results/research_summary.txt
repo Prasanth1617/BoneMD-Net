@@ -1,0 +1,177 @@
+======================================================================
+BoneMD-Net RESEARCH SUMMARY
+======================================================================
+
+PROJECT
+-------
+BoneMD-Net: A Multimodal Knowledge Distillation Network for Efficient
+Bone Disorder Diagnosis Using X-ray and CT Images.
+
+DATASET
+-------
+Dataset: LUMOS
+Patients: 803
+Labels:
+  Normal      : 289
+  Osteopenia  : 291
+  Osteoporosis: 223
+
+Multimodal eligible patients after strict AP + Lateral X-ray matching:
+  Total: 272
+  Normal      : 122
+  Osteopenia  : 79
+  Osteoporosis: 71
+
+Patient-level split:
+  Train: 190
+  Validation: 41
+  Test: 41
+
+Split is fixed with random seed 42.
+
+INPUT PREPROCESSING
+-------------------
+X-ray:
+  - AP and lateral views
+  - MONOCHROME1 inversion handled
+  - 1st-99th percentile intensity normalization
+  - aspect-ratio-preserving resize
+  - zero padding
+  - final size: 224 x 224
+
+CT:
+  - PRIMARY + AXIAL reconstruction
+  - HU conversion
+  - reconstruction selection by spatial resolution/coverage
+  - resampling to 1.0 x 1.0 x 2.5 mm
+  - center crop/padding
+  - final volume: 192 x 320 x 320
+
+STUDENT MODEL
+-------------
+X-ray encoder feature dimension: 256
+CT encoder feature dimension: 256
+Fusion feature dimension: 256
+Classes: 3
+Total parameters: 1,108,038
+
+TEACHER MODEL
+-------------
+Teacher feature dimension: 512
+Three modality streams:
+  - AP X-ray
+  - Lateral X-ray
+  - CT
+Total parameters: 6,105,603
+
+KNOWLEDGE DISTILLATION
+----------------------
+Alpha: 0.5
+Feature loss beta: 0.2
+Temperature: 4.0
+Classification loss: Cross Entropy
+Distillation loss: KL divergence
+Feature loss: MSE after student feature projection
+
+OPTIMIZATION
+------------
+Optimizer: AdamW
+Learning rate: 1e-4
+Weight decay: 1e-4
+Batch size: 1
+
+LOCKED TEST RESULTS
+-------------------
+Teacher V2:
+  Parameters: 6,105,603
+  Validation accuracy: 56.10%
+  Test accuracy: 63.41%
+  Test macro F1: 57.97%
+
+Student + KD:
+  Parameters: 1,108,038
+  Validation accuracy: 51.22%
+  Test accuracy: 46.34%
+  Test macro F1: 25.87%
+
+Student baseline:
+  Parameters: 1,108,038
+  Validation accuracy: 51.22%
+  Test accuracy: 43.90%
+  Test macro F1: 28.28%
+
+X-ray-only (AP + Lateral):
+  Parameters: 520,643
+  Validation accuracy: 46.34%
+  Test accuracy: 46.34%
+  Test macro F1: 28.57%
+
+CT-only:
+  Parameters: 357,763
+  Validation accuracy: 46.34%
+  Test accuracy: 41.46%
+  Test macro F1: 20.24%
+
+AP-only:
+  Parameters: 487,875
+  Validation accuracy: 48.78%
+  Test accuracy: 46.34%
+  Test macro F1: 21.11%
+
+Lateral-only:
+  Parameters: 487,875
+  Validation accuracy: 43.90%
+  Test accuracy: 46.34%
+  Test macro F1: 21.11%
+
+EFFICIENCY
+----------
+Teacher parameters: 6,105,603
+Student parameters: 1,108,038
+Parameter reduction: 4,997,565
+Parameter reduction percentage: 81.85%
+Teacher/student parameter ratio: 5.51x
+
+IMPORTANT INTERPRETATION
+------------------------
+The teacher currently provides the strongest measured test performance.
+
+The student uses substantially fewer parameters, but its current test
+performance is lower than the teacher.
+
+Knowledge distillation improves test accuracy relative to the supervised
+student baseline (46.34% vs 43.90%), but its test macro F1 is lower
+(25.87% vs 28.28%).
+
+The X-ray-only and CT-only experiments show class-collapse behavior and
+should be discussed as modality ablations rather than evidence of a
+universal modality ranking.
+
+AP-only and lateral-only models both predicted only the Normal class on
+the locked test set.
+
+The test set was used only after model selection and was not used for
+hyperparameter tuning.
+
+LIMITATIONS
+-----------
+- Small multimodal cohort after strict matching: 272 patients.
+- Test set contains only 41 patients.
+- Class imbalance remains present.
+- Current student performance does not yet match teacher performance.
+- Several ablation models exhibit minority-class collapse.
+- External validation has not yet been performed.
+- Clinical deployment should not be claimed from the current experiments.
+
+NEXT DEVELOPMENT PHASE
+----------------------
+1. Final inference pipeline.
+2. Frontend demonstration UI.
+3. Connect trained model to inference interface.
+4. Display predicted class and probabilities.
+5. Add X-ray/CT input handling.
+6. Add model explanation/visualization where technically justified.
+7. Final project documentation.
+8. Final figures and tables.
+9. Reproducibility/cleanup.
+======================================================================

@@ -1,3 +1,4 @@
 model,parameters,test_accuracy,test_macro_f1,parameter_reduction_vs_teacher_percent
 Teacher V2,6105603,0.6341,0.5797,0.0
+Final Normalized Teacher + Strong Osteopenia Weight + Label Smoothing + Cosine LR,6105603,0.7561,0.7543,0.0
 Student + KD,1108038,0.4634,0.2587,81.85211190442615

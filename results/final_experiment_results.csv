@@ -4,7 +4,7 @@ Normalized Teacher,0.6341,0.6585,0.5751
 Weighted Normalized Teacher,0.6341,0.6585,0.5751
 Contrastive Teacher,0.6585,0.6829,0.6866
 Spatial Contrastive Teacher,0.7073,0.561,0.5548
-Normalized Teacher + Strong Osteopenia Weight,0.6829,0.7561,0.7543
+Normalized Teacher + Strong Osteopenia Weight + Label Smoothing + Cosine LR,0.6829,0.7561,0.7543
 Student + KD,0.5122,0.4634,0.2587
 Student Baseline,0.5122,0.439,0.2828
 X-ray-only (AP + Lateral),0.4634,0.4634,0.2857

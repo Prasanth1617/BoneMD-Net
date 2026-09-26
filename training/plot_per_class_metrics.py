@@ -17,22 +17,23 @@ def main():
         "Osteoporosis",
     ]
 
+    # Verified metrics from FINAL_BEST_TEACHER_75_61.pth
     precision = np.array([
-        0.7222,
-        0.5000,
-        0.8182,
+        0.9286,
+        0.6429,
+        0.6923,
     ]) * 100
 
     recall = np.array([
         0.6842,
-        0.5000,
+        0.7500,
         0.9000,
     ]) * 100
 
     f1 = np.array([
-        0.7027,
-        0.5000,
-        0.8571,
+        0.7879,
+        0.6923,
+        0.7826,
     ]) * 100
 
     x = np.arange(len(classes))
@@ -63,7 +64,7 @@ def main():
 
     plt.ylabel("Score (%)")
     plt.xlabel("Class")
-    plt.title("BoneMD-Net Teacher — Per-Class Test Performance")
+    plt.title("BoneMD-Net Teacher - Per-Class Test Performance")
 
     plt.xticks(
         x,

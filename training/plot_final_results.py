@@ -9,6 +9,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CSV_PATH = PROJECT_ROOT / "results" / "final_experiment_results.csv"
 OUTPUT_PATH = PROJECT_ROOT / "results" / "final_model_comparison.png"
 
+FINAL_MODEL_NAME = (
+    "Normalized Teacher + Strong Osteopenia Weight "
+    "+ Label Smoothing + Cosine LR"
+)
+
 
 def main():
     print("=" * 70)
@@ -98,12 +103,19 @@ def main():
     print("Saved:")
     print(OUTPUT_PATH)
     print()
-    print("Final model:")
-    final_row = plot_df[
-        plot_df["model"]
-        == "Normalized Teacher + Strong Osteopenia Weight"
-    ].iloc[0]
 
+    final_rows = plot_df[
+        plot_df["model"] == FINAL_MODEL_NAME
+    ]
+
+    if final_rows.empty:
+        raise ValueError(
+            f"Final model not found in CSV: {FINAL_MODEL_NAME}"
+        )
+
+    final_row = final_rows.iloc[0]
+
+    print("Final model:")
     print(f"  Validation Accuracy: {final_row['val_accuracy']:.2f}%")
     print(f"  Test Accuracy:       {final_row['test_accuracy']:.2f}%")
     print(f"  Test Macro-F1:       {final_row['test_macro_f1']:.2f}%")

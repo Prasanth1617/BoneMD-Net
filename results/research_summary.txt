@@ -7,10 +7,12 @@ PROJECT
 BoneMD-Net: A Multimodal Knowledge Distillation Network for Efficient
 Bone Disorder Diagnosis Using X-ray and CT Images.
 
+
 DATASET
 -------
 Dataset: LUMOS
 Patients: 803
+
 Labels:
   Normal      : 289
   Osteopenia  : 291
@@ -28,6 +30,7 @@ Patient-level split:
   Test: 41
 
 Split is fixed with random seed 42.
+
 
 INPUT PREPROCESSING
 -------------------
@@ -47,6 +50,7 @@ CT:
   - center crop/padding
   - final volume: 192 x 320 x 320
 
+
 STUDENT MODEL
 -------------
 X-ray encoder feature dimension: 256
@@ -55,38 +59,196 @@ Fusion feature dimension: 256
 Classes: 3
 Total parameters: 1,108,038
 
+
 TEACHER MODEL
 -------------
 Teacher feature dimension: 512
+
 Three modality streams:
   - AP X-ray
   - Lateral X-ray
   - CT
+
 Total parameters: 6,105,603
 
-KNOWLEDGE DISTILLATION
+
+FINAL TEACHER TRAINING CONFIGURATION
+-------------------------------------
+Architecture:
+  BoneMDTeacherNorm
+
+Training epochs:
+  250
+
+Batch size:
+  1
+
+Optimizer:
+  AdamW
+
+Initial learning rate:
+  1e-4
+
+Weight decay:
+  1e-4
+
+Label smoothing:
+  0.05
+
+Class weights:
+  Normal      : 0.70
+  Osteopenia  : 1.80
+  Osteoporosis: 1.20
+
+Learning-rate scheduler:
+  CosineAnnealingLR
+
+Scheduler T_max:
+  250
+
+Minimum learning rate:
+  1e-6
+
+Random seed:
+  42
+
+Data augmentation:
+  Not enabled in the final training run.
+
+Best checkpoint:
+  checkpoints/FINAL_BEST_TEACHER_75_61.pth
+
+Best epoch:
+  195
+
+Best validation accuracy:
+  68.29%
+
+
+FINAL TEACHER TEST RESULTS
+--------------------------
+Model:
+  Normalized Teacher + Strong Osteopenia Weight
+  + Label Smoothing + Cosine LR
+
+Parameters:
+  6,105,603
+
+Validation accuracy:
+  68.29%
+
+Test accuracy:
+  75.61%
+
+Test macro precision:
+  75.46%
+
+Test macro recall:
+  77.81%
+
+Test macro F1:
+  75.43%
+
+Test weighted F1:
+  75.86%
+
+Test samples:
+  41
+
+Correct predictions:
+  31 / 41
+
+Predicted class distribution:
+  Normal      : 14
+  Osteopenia  : 14
+  Osteoporosis: 13
+
+
+FINAL CONFUSION MATRIX
 ----------------------
-Alpha: 0.5
-Feature loss beta: 0.2
-Temperature: 4.0
-Classification loss: Cross Entropy
-Distillation loss: KL divergence
-Feature loss: MSE after student feature projection
+Rows = actual class
+Columns = predicted class
 
-OPTIMIZATION
-------------
-Optimizer: AdamW
-Learning rate: 1e-4
-Weight decay: 1e-4
-Batch size: 1
+                    Predicted
+                 Normal  Osteopenia  Osteoporosis
 
-LOCKED TEST RESULTS
--------------------
+Actual Normal        13       4           2
+Actual Osteopenia    1        9           2
+Actual Osteoporosis  0        1           9
+
+
+FINAL PER-CLASS TEST METRICS
+----------------------------
+Normal:
+  Precision: 92.86%
+  Recall:    68.42%
+  F1-score:  78.79%
+  Support:   19
+
+Osteopenia:
+  Precision: 64.29%
+  Recall:    75.00%
+  F1-score:  69.23%
+  Support:   12
+
+Osteoporosis:
+  Precision: 69.23%
+  Recall:    90.00%
+  F1-score:  78.26%
+  Support:   10
+
+
+KNOWLEDGE DISTILLATION CONFIGURATION
+------------------------------------
+The following settings belong to the evaluated Student + KD
+experiment:
+
+Alpha:
+  0.5
+
+Feature loss beta:
+  0.2
+
+Temperature:
+  4.0
+
+Classification loss:
+  Cross Entropy
+
+Distillation loss:
+  KL divergence
+
+Feature loss:
+  MSE after student feature projection
+
+
+HISTORICAL EXPERIMENT RESULTS
+-----------------------------
 Teacher V2:
   Parameters: 6,105,603
   Validation accuracy: 56.10%
   Test accuracy: 63.41%
   Test macro F1: 57.97%
+
+Normalized Teacher:
+  Validation accuracy: 63.41%
+  Test accuracy: 65.85%
+  Test macro F1: 57.51%
+
+Weighted Normalized Teacher:
+  Validation accuracy: 63.41%
+  Test accuracy: 65.85%
+  Test macro F1: 57.51%
+
+Contrastive Teacher:
+  Validation accuracy: 65.85%
+  Test accuracy: 68.29%
+  Test macro F1: 68.66%
+
+Spatial Contrastive Teacher:
+  Validation accuracy: 70.73%
+  Test accuracy: 56.10%
+  Test macro F1: 55.48%
 
 Student + KD:
   Parameters: 1,108,038
@@ -124,34 +286,70 @@ Lateral-only:
   Test accuracy: 46.34%
   Test macro F1: 21.11%
 
+
 EFFICIENCY
 ----------
-Teacher parameters: 6,105,603
-Student parameters: 1,108,038
-Parameter reduction: 4,997,565
-Parameter reduction percentage: 81.85%
-Teacher/student parameter ratio: 5.51x
+Teacher parameters:
+  6,105,603
+
+Student parameters:
+  1,108,038
+
+Parameter reduction:
+  4,997,565
+
+Parameter reduction percentage:
+  81.85%
+
+Teacher/student parameter ratio:
+  5.51x
+
+The final normalized teacher has the same architecture parameter count
+as the Teacher V2 configuration.
+
 
 IMPORTANT INTERPRETATION
 ------------------------
-The teacher currently provides the strongest measured test performance.
+Among the evaluated configurations, the final normalized multimodal
+teacher achieved the highest recorded test accuracy in the current
+experiment set:
 
-The student uses substantially fewer parameters, but its current test
-performance is lower than the teacher.
+  Test accuracy: 75.61%
+  Test macro F1: 75.43%
 
-Knowledge distillation improves test accuracy relative to the supervised
-student baseline (46.34% vs 43.90%), but its test macro F1 is lower
-(25.87% vs 28.28%).
+The final 75.61% result is a teacher-model result. It was trained using
+weighted cross-entropy with label smoothing and cosine learning-rate
+scheduling. It was not produced by the Student + KD training procedure.
 
-The X-ray-only and CT-only experiments show class-collapse behavior and
-should be discussed as modality ablations rather than evidence of a
-universal modality ranking.
+The student uses substantially fewer parameters than the teacher:
+1,108,038 versus 6,105,603 parameters.
 
-AP-only and lateral-only models both predicted only the Normal class on
+The current Student + KD configuration did not match the predictive
+performance of the final teacher:
+
+  Student + KD test accuracy: 46.34%
+  Final teacher test accuracy: 75.61%
+
+The Student + KD experiment achieved higher test accuracy than the
+supervised student baseline (46.34% vs 43.90%), while its test macro F1
+was lower (25.87% vs 28.28%).
+
+The X-ray-only and CT-only experiments should be treated as modality
+ablations. Their results should not be interpreted as a universal
+ranking of modalities.
+
+AP-only and lateral-only models exhibited minority-class collapse on
 the locked test set.
 
-The test set was used only after model selection and was not used for
-hyperparameter tuning.
+The final checkpoint was selected using validation performance. The
+test set was used only for final evaluation and was not used for
+hyperparameter tuning or model selection.
+
+The final training run showed substantial training-set fitting while
+validation performance remained lower, indicating overfitting. The
+checkpoint from epoch 195 was retained because it provided the selected
+validation performance.
+
 
 LIMITATIONS
 -----------
@@ -161,7 +359,37 @@ LIMITATIONS
 - Current student performance does not yet match teacher performance.
 - Several ablation models exhibit minority-class collapse.
 - External validation has not yet been performed.
-- Clinical deployment should not be claimed from the current experiments.
+- Clinical deployment should not be claimed from the current
+  experiments.
+- Model probabilities should not be interpreted as clinical certainty.
+
+
+RESULT ARTIFACTS
+----------------
+Final checkpoint:
+  checkpoints/FINAL_BEST_TEACHER_75_61.pth
+
+Final evaluation:
+  training/evaluate_final_75_61.py
+
+Final inference:
+  inference/predict_final.py
+
+Final model comparison:
+  results/final_model_comparison.png
+
+Final per-class metrics:
+  results/per_class_metrics.png
+
+Final confusion matrix:
+  results/final_confusion_matrix.png
+
+Final experiment table:
+  results/final_experiment_results.csv
+
+Model efficiency table:
+  results/model_efficiency.csv
+
 
 NEXT DEVELOPMENT PHASE
 ----------------------

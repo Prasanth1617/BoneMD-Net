@@ -21,3 +21,7 @@ Thumbs.db
 .idea/
 
 dataset/lumos_clinical_data.xlsx
+
+# Local test medical imaging samples
+TEST_PATIENT_006/
+TEST_SAMPLES_6/
